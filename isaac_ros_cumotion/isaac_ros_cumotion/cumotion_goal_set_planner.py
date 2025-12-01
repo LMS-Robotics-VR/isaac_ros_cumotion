@@ -21,6 +21,14 @@ import rclpy
 from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
 
+from curobo.geom.types import Mesh, Obstacle
+from curobo.geom.sphere_fit import fit_spheres_to_mesh
+import torch
+import numpy as np
+
+from geometry_msgs.msg import Point, Quaternion
+from scipy.spatial.transform import Rotation as R
+
 
 class CumotionGoalSetPlannerServer(CumotionActionServer):
 
@@ -30,6 +38,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         self._goal_set_planner_server = ActionServer(
             self, MotionPlan, "cumotion/motion_plan", self.motion_plan_execute_callback
         )
+        
 
     def warmup(self):
         self.get_logger().info("warming up cuMotion, wait until ready")
@@ -102,12 +111,16 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         self.get_logger().info(
             "Planning with time_dilation_factor: " + str(time_dilation_factor)
         )
+        
+        plan_req = goal_handle.request
 
         goal_handle.succeed()
         self.motion_gen.reset(reset_seed=False)
 
         result = MotionPlan.Result()
         result.success = False
+        
+        total_spheres = []
         if goal_handle.request.use_planning_scene:
             self.get_logger().info("Updating planning scene")
             scene = goal_handle.request.world
@@ -117,9 +130,96 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 result.error_code.val = MoveItErrorCodes.COLLISION_CHECKING_UNAVAILABLE
                 self.get_logger().error("World update failed.")
                 return result
+            
+            # 2. Extract and add attached collision objects (tools, grasped items)
+            # This is the missing step! The goal message puts them here.
+            if (goal_handle.request.robot_state and 
+                goal_handle.request.robot_state.attached_collision_objects):
+                
+                num_attached = len(goal_handle.request.robot_state.attached_collision_objects)
+                self.get_logger().info(f"Found {num_attached} attached object(s) in robot_state.")
+                
+                allocated_curr_spheres = self.motion_gen.robot_cfg.kinematics.kinematics_config.get_link_spheres("gripper")
+                self.get_logger().info(f"Current gripper spheres before adding attached objects: {allocated_curr_spheres.shape}")
+                
+                # handling spheres for attached objects
+                # self.motion_gen.detach_spheres_from_robot(link_name="gripper")
+                
+                attached_meshes_num = 0
+                for attached_obj in goal_handle.request.robot_state.attached_collision_objects:
+                    attached_meshes_num += len(attached_obj.object.meshes)
+                self.get_logger().info(f"Total attached meshes to process: {attached_meshes_num}")
+                
+                
+                surface_sphere_radius = 0.01  # 1 cm
+                
+                for attached_obj in goal_handle.request.robot_state.attached_collision_objects:
+                    pose = attached_obj.object.pose
+                    for i, mesh in enumerate(attached_obj.object.meshes):
+                        self.get_logger().info(f"Processing attached object id: {attached_obj.object.id}, mesh index: {i}")
+                        mesh_vertices = mesh.vertices
+                        mesh_triangles = mesh.triangles
+                        faces = []
+                        for tri in mesh_triangles:
+                            faces.append([tri.vertex_indices[0], tri.vertex_indices[1], tri.vertex_indices[2]])
+                        faces = torch.tensor(faces)
+                        points = []
+                        for v in mesh_vertices:
+                            points.append([v.x, v.y, v.z])
+                        points = torch.tensor(points, dtype=torch.float32)
 
+                        position: Point = pose.position
+                        orientation: Quaternion = pose.orientation
+                        self.get_logger().info(f"Mesh pose position: {position}, orientation: {orientation}")
+                        # Position
+                        t = np.array([position.x, position.y, position.z], dtype=np.float64)
+                        # Quaternion geometry_msgs uses: x, y, z, w
+                        quat = np.array([orientation.x, orientation.y, orientation.z, orientation.w],dtype=np.float64)
+                        # Convert quaternion to rotation matrix
+                        rot = R.from_quat(quat).as_matrix()  # shape (3,3)
+
+                        # Build 4x4 homogeneous transform
+                        T = np.eye(4, dtype=np.float64)
+                        T[:3, :3] = rot
+                        T[:3, 3] = t
+                        
+
+                        spheres , radius = fit_spheres_to_mesh(Mesh(name=attached_obj.object.id,vertices=points, faces=faces).get_trimesh_mesh().apply_transform(matrix=T), n_spheres=allocated_curr_spheres.shape[0]//attached_meshes_num + 1, surface_sphere_radius=surface_sphere_radius)
+                        self.get_logger().info(f"Fitted {len(spheres)} spheres to attached object {attached_obj.object.id} with radius {radius}")
+                        # for each of the spheres we need to have x y z r, the spheres returned are x y z only and radius is np array of radiuses
+                        # stack them with numpy
+                        spheres = np.hstack([spheres, radius[:, np.newaxis]])
+                        total_spheres.extend(spheres)
+                # limit to max the number of spheres allocated
+                max_spheres = allocated_curr_spheres.shape[0]
+                if len(total_spheres) > max_spheres:
+                    # make sure the shape are same
+                    self.get_logger().warn(f"Number of spheres {len(total_spheres)} for attached objects exceeded max allocated {max_spheres}, truncating.")
+                    total_spheres = total_spheres[:max_spheres]
+                    self.get_logger().info(f"Truncated to {len(total_spheres)} spheres.")
+                    # pad with zeros if less
+                elif len(total_spheres) < max_spheres:
+                    self.get_logger().info(f"Number of spheres {len(total_spheres)} for attached objects less than max allocated {max_spheres}, padding with zeros.")
+                    num_to_pad = max_spheres - len(total_spheres)
+                    for _ in range(num_to_pad):
+                        total_spheres.append([0.0, 0.0, 0.0, 0.0])  # x,y,z,radius zero padding
+                
+                self.get_logger().info(f"Spheres data:")
+                for s in total_spheres:
+                    self.get_logger().info(f"  Sphere center: {s[:3]}, radius: {s[3]}")
+                    
+                total_spheres_np = np.array(total_spheres, dtype=np.float32)
+                
+                
+                
+                total_spheres_tensor = torch.from_numpy(total_spheres_np)
+                self.get_logger().info(f"Attaching tensor of shape {total_spheres_tensor.shape} to gripper link.")
+                # self.toggle_link_collision(plan_req.disable_collision_links, True)
+                
+        # result.success = False
+        # return result
+    
         start_state = None
-        plan_req = goal_handle.request
         if plan_req.use_current_state:
             if self._CumotionActionServer__js_buffer is None:
                 self.get_logger().error(
@@ -199,7 +299,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             self.motion_gen.update_locked_joints(
                 {"liftkit_joint": start_val}, robot_config_dict=self.robot_config
             )
-
+    
         if plan_req.plan_grasp:
             self.get_logger().info(
                 "Planning to Grasp Object with stop at offset distance"
@@ -225,6 +325,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 plan_req.grasp_approach_constraint_in_goal_frame
             )
             retract_constraint_in_goal_frame = plan_req.retract_constraint_in_goal_frame
+            self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
             grasp_plan_result = self.motion_gen.plan_grasp(
                 start_state,
                 poses,
@@ -271,6 +372,9 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 if len(plan_req.goal_state.position) <= 0:
                     self.get_logger().error("goal state is empty")
                     return result
+                
+                # result.success = False
+                # return result
                 goal_state = self.motion_gen.get_active_js(
                     CuJointState.from_position(
                         position=self.tensor_args.to_device(
@@ -280,6 +384,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                     )
                 )
                 self.toggle_link_collision(plan_req.disable_collision_links, False)
+                self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
                 motion_gen_result = self.motion_gen.plan_single_js(
                     start_state,
                     goal_state,
@@ -324,6 +429,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                         f"Hi max attempts {self._CumotionActionServer__max_attempts}"
                     )
                     self.get_logger().error(f"time dilation {time_dilation_factor}")
+                    self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
                     motion_gen_result = self.motion_gen.plan_single(
                         start_state,
                         poses,
@@ -339,6 +445,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                         ),
                     )
                 else:
+                    self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
                     motion_gen_result = self.motion_gen.plan_goalset(
                         start_state,
                         poses,

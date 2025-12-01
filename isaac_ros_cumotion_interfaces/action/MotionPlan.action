@@ -1,3 +1,4 @@
+moveit_msgs/RobotState robot_state
 geometry_msgs/PoseArray goal_pose
 sensor_msgs/JointState goal_state
 sensor_msgs/JointState start_state
