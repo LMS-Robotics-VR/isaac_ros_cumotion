@@ -120,6 +120,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         result = MotionPlan.Result()
         result.success = False
         
+        total_spheres_tensor = None
         total_spheres = []
         if goal_handle.request.use_planning_scene:
             self.get_logger().info("Updating planning scene")
@@ -207,11 +208,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 self.get_logger().info(f"Spheres data:")
                 for s in total_spheres:
                     self.get_logger().info(f"  Sphere center: {s[:3]}, radius: {s[3]}")
-                    
-                total_spheres_np = np.array(total_spheres, dtype=np.float32)
-                
-                
-                
+                            
+                total_spheres_np = np.array(total_spheres, dtype=np.float32)        
                 total_spheres_tensor = torch.from_numpy(total_spheres_np)
                 self.get_logger().info(f"Attaching tensor of shape {total_spheres_tensor.shape} to gripper link.")
                 # self.toggle_link_collision(plan_req.disable_collision_links, True)
@@ -325,7 +323,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 plan_req.grasp_approach_constraint_in_goal_frame
             )
             retract_constraint_in_goal_frame = plan_req.retract_constraint_in_goal_frame
-            self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
+            if total_spheres_tensor!= None: self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
             grasp_plan_result = self.motion_gen.plan_grasp(
                 start_state,
                 poses,
@@ -384,7 +382,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                     )
                 )
                 self.toggle_link_collision(plan_req.disable_collision_links, False)
-                self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
+                if total_spheres_tensor!= None: self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
                 motion_gen_result = self.motion_gen.plan_single_js(
                     start_state,
                     goal_state,
@@ -429,7 +427,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                         f"Hi max attempts {self._CumotionActionServer__max_attempts}"
                     )
                     self.get_logger().error(f"time dilation {time_dilation_factor}")
-                    self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
+                    if total_spheres_tensor!= None: self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
                     motion_gen_result = self.motion_gen.plan_single(
                         start_state,
                         poses,
@@ -445,7 +443,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                         ),
                     )
                 else:
-                    self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
+                    if total_spheres_tensor!= None: self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
                     motion_gen_result = self.motion_gen.plan_goalset(
                         start_state,
                         poses,
