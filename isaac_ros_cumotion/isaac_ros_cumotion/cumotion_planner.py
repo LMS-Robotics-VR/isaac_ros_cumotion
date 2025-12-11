@@ -387,7 +387,6 @@ class CumotionActionServer(Node):
             "world_voxel"
         ).get_grid_shape()[0]
         
-        self.scene_hash = "" # usefull for only updating scene when changes happen identified easily with a hash
 
     def warmup(self):
         self.get_logger().info("warming up cuMotion, wait until ready")
@@ -725,21 +724,15 @@ class CumotionActionServer(Node):
 
         ### Scene Handling
         scene = goal_handle.request.planning_options.planning_scene_diff
-        new_scene_hash = hash(scene)
-        print("Scene hash: ",new_scene_hash )
-        if  new_scene_hash != self.scene_hash:
-            self.scene_hash = new_scene_hash
-            self.get_logger().info("New scene identified updating curobo...")
-            
-            world_objects = scene.world.collision_objects
-            world_update_status = self.update_world_objects(world_objects)
+        self.get_logger().info("New scene identified updating curobo...")
+        
+        world_objects = scene.world.collision_objects
+        world_update_status = self.update_world_objects(world_objects)
 
-            if not world_update_status:
-                result.error_code.val = MoveItErrorCodes.COLLISION_CHECKING_UNAVAILABLE
-                self.get_logger().error("World update failed.")
-                return result
-        else:
-            self.get_logger().info("Scipping world update.")
+        if not world_update_status:
+            result.error_code.val = MoveItErrorCodes.COLLISION_CHECKING_UNAVAILABLE
+            self.get_logger().error("World update failed.")
+            return result
             
         start_state = None
         if len(plan_req.start_state.joint_state.position) > 0:
