@@ -1,4 +1,7 @@
 moveit_msgs/RobotState robot_state
+string[] locked_joints
+float32[] locked_joint_values
+
 geometry_msgs/PoseArray goal_pose
 sensor_msgs/JointState goal_state
 sensor_msgs/JointState start_state

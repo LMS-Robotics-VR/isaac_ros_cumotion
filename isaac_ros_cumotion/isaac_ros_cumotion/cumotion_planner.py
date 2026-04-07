@@ -358,7 +358,7 @@ class CumotionActionServer(Node):
         self.robot_config = robot_config["robot_cfg"]
 
         # for specifing the posible lock joints
-        self.robot_config["kinematics"]["lock_joints"] = {"liftkit_joint": 0.0}
+        # self.robot_config["kinematics"]["lock_joints"] = {"liftkit_joint": 0.0}
 
         motion_gen_config = MotionGenConfig.load_from_robot_config(
             self.robot_config,
@@ -861,28 +861,28 @@ class CumotionActionServer(Node):
         #     MotionGenPlanConfig(max_attempts=self.__max_attempts, enable_graph_attempt=1,
         #                         time_dilation_factor=time_dilation_factor, timeout=100),
         # )
-
+        
         # TODO need to change the joint state condition checking to be joint goal only if the joint constraint number is the same with the available joints
-        print([o.joint_name for o in plan_req.goal_constraints[0].joint_constraints])
-        print("safdjhfdsafdhjslhafdhlfasdhasfdjk")
-        obj = next(
-            (
-                o
-                for o in plan_req.goal_constraints[0].joint_constraints
-                if o.joint_name == "liftkit_joint"
-            ),
-            None,
-        )
-        if obj != None:
-            # find the liftkit constraint and set the locked joint to its value
-            plan_req.goal_constraints[0].joint_constraints
-            self.motion_gen.update_locked_joints(
-                {"liftkit_joint": obj.position}, robot_config_dict=self.robot_config
-            )
-        else:
-            # TODO from the start_state find the start joint of the liftkit and set its value as the constraint
-            self.get_logger().info("didnt found required constraint for liftkit_joint")
-            return result
+        # print([o.joint_name for o in plan_req.goal_constraints[0].joint_constraints])
+        # print("safdjhfdsafdhjslhafdhlfasdhasfdjk")
+        # obj = next(
+        #     (
+        #         o
+        #         for o in plan_req.goal_constraints[0].joint_constraints
+        #         if o.joint_name == "liftkit_joint"
+        #     ),
+        #     None,
+        # )
+        # if obj != None:
+        #     # find the liftkit constraint and set the locked joint to its value
+        #     plan_req.goal_constraints[0].joint_constraints
+        #     self.motion_gen.update_locked_joints(
+        #         {"liftkit_joint": obj.position}, robot_config_dict=self.robot_config
+        #     )
+        # else:
+        #     # TODO from the start_state find the start joint of the liftkit and set its value as the constraint
+        #     self.get_logger().info("didnt found required constraint for liftkit_joint")
+        #     return result
 
         if (
             len(plan_req.goal_constraints[0].joint_constraints) > 0

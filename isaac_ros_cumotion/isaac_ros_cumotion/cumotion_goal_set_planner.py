@@ -282,31 +282,46 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             self.get_logger().error("joint state in start state was empty")
             return result
         print("start state: ",time.time() - start)
-        
-        # find the index of the liftkit joint on the start position
-        # if found then check if the goal_state liftkit position is same
-        # if is then set the liftkit constraint in motion_gen with update_locked_joints with the value
 
-        ### Lock Liftkit Joint
+        # ============================
+        # === Handle locked joints ===
+        # ============================
+        # update locked joints from MotionPlan action request
+        print("locked joints in request: ", plan_req.locked_joints)
+        print("locked joint values in request: ", plan_req.locked_joint_values)
+        if len(plan_req.locked_joints) > 0 and len(plan_req.locked_joint_values) > 0:
+            if len(plan_req.locked_joints) != len(plan_req.locked_joint_values):
+                self.get_logger().error("locked joints and locked joint values should have same length")
+                return result
+            # assert that the locked joints are same with the start state joint names and have same values
+            for joint_name, joint_value in zip(plan_req.locked_joints, plan_req.locked_joint_values):
+                if joint_name not in plan_req.start_state.name:
+                    self.get_logger().error(f"locked joint {joint_name} is not in start state joint names")
+                    return result
+                idx = plan_req.start_state.name.index(joint_name)
+                start_joint_value = plan_req.start_state.position[idx]
+                if abs(start_joint_value - joint_value) > 0.01:
+                    self.get_logger().error(f"locked joint {joint_name} value {joint_value} is not same with start state joint value {start_joint_value}")
+                    return result
+            print("locked joints: ", plan_req.locked_joints, "locked joint values: ", plan_req.locked_joint_values)
+            # instead of lock joints , we will update the goal request 
+            # with path constraint to keep the joints close to the locked joint values
+
+            print("kinematics_config: ", self.motion_gen.kinematics.kinematics_config)
+            
+            self.motion_gen.update_locked_joints(
+                dict(zip(plan_req.locked_joints, plan_req.locked_joint_values)),
+                robot_config_dict=self.robot_config
+            )
+        else:
+            print("no locked joints provided, resetting locked joints to empty")
+            self.motion_gen.update_locked_joints({}, robot_config_dict=self.robot_config) # reset locked joints if not provided
+
         if plan_req.start_state.name[0] != "liftkit_joint":
             print("the planning request must contain liftkit_joint at [0] position")
             return result # 
         liftkit_start_val = plan_req.start_state.position[0]
-        print("test1")
         
-        # this is for pose goals - keep liftkit at same level
-        if self.prev_liftkit_start_val == None or abs(self.prev_liftkit_start_val - liftkit_start_val) > 0.01:
-            print("test2",liftkit_start_val,self.robot_config)
-            
-            self.motion_gen.update_locked_joints(
-                {"liftkit_joint": liftkit_start_val}, robot_config_dict=self.robot_config
-            )
-            print("test3")
-            
-            self.prev_liftkit_start_val = liftkit_start_val
-            print("update locked joints: ",time.time() - start)
-        else:
-            print("skiped locked joints: ",time.time() - start)
     
         if plan_req.plan_grasp:
             self.get_logger().info(
