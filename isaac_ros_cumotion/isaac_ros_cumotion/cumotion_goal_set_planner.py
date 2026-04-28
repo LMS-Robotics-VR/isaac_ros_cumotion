@@ -28,6 +28,7 @@ import numpy as np
 
 from geometry_msgs.msg import Point, Quaternion
 from scipy.spatial.transform import Rotation as R
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 
 
 class CumotionGoalSetPlannerServer(CumotionActionServer):
@@ -35,15 +36,16 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
     def __init__(self):
 
         super().__init__()
+        self.locked_joint_positions = self.robot_config["kinematics"]["lock_joints"]
+        
         self._goal_set_planner_server = ActionServer(
             self, MotionPlan, "cumotion/motion_plan", self.motion_plan_execute_callback
         )
         self.scene_hash = "" # usefull for only updating scene when changes happen identified easily with a hash
-        self.prev_liftkit_start_val = None
 
     def warmup(self):
         self.get_logger().info("warming up cuMotion, wait until ready")
-        self.motion_gen.warmup(enable_graph=True, n_goalset=100, warmup_js_trajopt=True)
+        # self.motion_gen.warmup(enable_graph=True, n_goalset=100, warmup_js_trajopt=True)
         self.get_logger().info("cuMotion is ready for planning queries!")
 
     def toggle_link_collision(self, collision_link_names: List[str], enable_flag: bool):
@@ -221,9 +223,12 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         return result, total_spheres_tensor, None
 
     def motion_plan_execute_callback(self, goal_handle):
+        # print config
+        print("Planning request received with config:")
+        print(self.robot_config)
+        
         import time
         start = time.time()
-        
         
         self.get_logger().info("Executing goal...")
         pose_cost_metric = None
@@ -290,24 +295,43 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         ### Lock Liftkit Joint
         if plan_req.start_state.name[0] != "liftkit_joint":
             print("the planning request must contain liftkit_joint at [0] position")
-            return result # 
-        liftkit_start_val = plan_req.start_state.position[0]
-        print("test1")
+            return result
         
-        # this is for pose goals - keep liftkit at same level
-        if self.prev_liftkit_start_val == None or abs(self.prev_liftkit_start_val - liftkit_start_val) > 0.01:
-            print("test2",liftkit_start_val,self.robot_config)
-            
-            self.motion_gen.update_locked_joints(
-                {"liftkit_joint": liftkit_start_val}, robot_config_dict=self.robot_config
+        # 1. Χρήση dictionary comprehension για καθαρότητα
+        requested_locked_joint_positions = {}
+        print("plan_req.start_state.name",plan_req.start_state.name)
+        print("plan_req.start_state.position",plan_req.start_state.position)
+        
+        plan_req_joint_name_to_index_map = {name: idx for idx, name in enumerate(plan_req.start_state.name)}
+        for name in self.locked_joint_positions.keys():
+            idx = plan_req_joint_name_to_index_map.get(name, None)
+            if idx is not None:
+                requested_locked_joint_positions[name] = float(plan_req.start_state.position[idx])
+                print(f"Requested locked joint: {name} with position {requested_locked_joint_positions[name]}")
+
+        # 2. Έλεγχος αν υπάρχουν όντως κλειδωμένα joints για αποφυγή σφαλμάτων
+        if requested_locked_joint_positions:
+            print(f"Requested locked joint positions: {requested_locked_joint_positions}")
+            # Υπολογισμός διαφοράς με ασφάλεια
+            diff = sum(
+                abs(
+                    float(requested_locked_joint_positions[jn]) -
+                    float(self.locked_joint_positions.get(jn, requested_locked_joint_positions[jn]))
+                )
+                for jn in requested_locked_joint_positions
             )
-            print("test3")
             
-            self.prev_liftkit_start_val = liftkit_start_val
-            print("update locked joints: ",time.time() - start)
-        else:
-            print("skiped locked joints: ",time.time() - start)
-    
+            should_update_locked_joints = diff > 0.001
+
+            if should_update_locked_joints:
+                self.locked_joint_positions.update(requested_locked_joint_positions)
+                print(f"Updating locked joints with positions: {self.locked_joint_positions}")
+                # Προσοχή: Το update_locked_joints στην GPU μπορεί να πάρει χρόνο
+                self.motion_gen.update_locked_joints(
+                    self.locked_joint_positions, 
+                    robot_config_dict=self.robot_config
+                )
+
         if plan_req.plan_grasp:
             self.get_logger().info(
                 "Planning to Grasp Object with stop at offset distance"
@@ -391,8 +415,13 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                         joint_names=plan_req.goal_state.name,
                     )
                 )
+                print("plan_req.disable_collision_links",plan_req.disable_collision_links)
                 self.toggle_link_collision(plan_req.disable_collision_links, False)
                 if total_spheres_tensor!= None: self.motion_gen.attach_spheres_to_robot(None, total_spheres_tensor, link_name="gripper")
+                
+                print("start state pos: ",start_state.position)
+                print("goal state pos: ",goal_state.position)
+                
                 motion_gen_result = self.motion_gen.plan_single_js(
                     start_state,
                     goal_state,
@@ -434,6 +463,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 
 
                 self.toggle_link_collision(plan_req.disable_collision_links, False)
+                
                 print("after toggle link collision: ",time.time() - start)
                 
                 if poses.shape[1] == 1:
@@ -452,8 +482,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                         start_state,
                         poses,
                         MotionGenPlanConfig(
-                            max_attempts=1,
-                            enable_graph_attempt=0,
+                            # max_attempts=1,
+                            # enable_graph_attempt=0,
                             # max_attempts=self._CumotionActionServer__max_attempts,
                             # enable_graph_attempt=1,
                             time_dilation_factor=time_dilation_factor,

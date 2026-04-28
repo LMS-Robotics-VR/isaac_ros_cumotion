@@ -73,6 +73,7 @@ class CumotionActionServer(Node):
         self.declare_parameter("include_trajopt_retract_seed", True)
         self.declare_parameter("num_trajopt_time_steps", 32)
         self.declare_parameter("trajopt_finetune_iters", 400)
+        self.declare_parameter("gradient_trajopt_file", "gradient_trajopt.yml")
         self.declare_parameter("interpolation_dt", 0.025)
         self.declare_parameter("collision_cache_mesh", 20)
         self.declare_parameter("collision_cache_cuboid", 20)
@@ -177,6 +178,13 @@ class CumotionActionServer(Node):
             .get_parameter_value()
             .integer_value
         )
+        self.__gradient_trajopt_file = (
+            self.get_parameter("gradient_trajopt_file")
+            .get_parameter_value()
+            .string_value
+        )
+        if self.__gradient_trajopt_file == "":
+            self.__gradient_trajopt_file = None
         self.__interpolation_dt = (
             self.get_parameter("interpolation_dt").get_parameter_value().double_value
         )
@@ -357,9 +365,6 @@ class CumotionActionServer(Node):
 
         self.robot_config = robot_config["robot_cfg"]
 
-        # for specifing the posible lock joints
-        self.robot_config["kinematics"]["lock_joints"] = {"liftkit_joint": 0.0}
-
         motion_gen_config = MotionGenConfig.load_from_robot_config(
             self.robot_config,
             world_file,
@@ -374,6 +379,7 @@ class CumotionActionServer(Node):
             collision_checker_type=CollisionCheckerType.VOXEL,
             ee_link_name=self.__tool_frame,
             finetune_trajopt_iters=self.__trajopt_finetune_iters,
+            gradient_trajopt_file=self.__gradient_trajopt_file,
         )
 
         motion_gen = MotionGen(motion_gen_config)
@@ -744,6 +750,8 @@ class CumotionActionServer(Node):
                     joint_names=plan_req.start_state.joint_state.name,
                 )
             )
+            print("Start state name: ", plan_req.start_state.joint_state.name)
+            print("Start state position: ", plan_req.start_state.joint_state.position)
         else:
             self.get_logger().info(
                 "PlanRequest start state was empty, reading current joint state"
@@ -781,6 +789,8 @@ class CumotionActionServer(Node):
                 start_state.velocity += current_joint_state.velocity
             else:
                 start_state = current_joint_state
+                
+            print("After processing start state, position: ", start_state.position)
 
         if len(plan_req.goal_constraints[0].joint_constraints) > 0:
             self.get_logger().info("Calculating goal pose from Joint target")
@@ -883,6 +893,8 @@ class CumotionActionServer(Node):
             # TODO from the start_state find the start joint of the liftkit and set its value as the constraint
             self.get_logger().info("didnt found required constraint for liftkit_joint")
             return result
+        
+        print("start_state: ", start_state.position)
 
         if (
             len(plan_req.goal_constraints[0].joint_constraints) > 0
