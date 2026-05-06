@@ -79,11 +79,11 @@ class CumotionGoalSetClient:
         }
 
     def send_plan_goal(self, goal_msg, visualize_trajectory):
-        self.node.get_logger().info('Sending goal')
+        # self.node.get_logger().info('Sending goal')
         self.result = None
 
         self.action_client.wait_for_server()
-        self.node.get_logger().info('Found action server')
+        # self.node.get_logger().info('Found action server')
 
         self.send_goal_future = self.action_client.send_goal_async(goal_msg)
         self.send_goal_future.add_done_callback(self.goal_response_callback)
@@ -319,7 +319,7 @@ class CumotionGoalSetClient:
         self.result = None
 
         self.execute_plan_client.wait_for_server()
-        self.node.get_logger().info('Found action server')
+        # self.node.get_logger().info('Found action server')
 
         goal_msg = ExecuteTrajectory.Goal()
         goal_msg.trajectory = robot_trajectory

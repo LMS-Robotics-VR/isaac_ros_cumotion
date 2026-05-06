@@ -42,6 +42,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             self, MotionPlan, "cumotion/motion_plan", self.motion_plan_execute_callback
         )
         self.scene_hash = "" # usefull for only updating scene when changes happen identified easily with a hash
+        self._attached_spheres_tensor = None
 
     def warmup(self):
         self.get_logger().info("warming up cuMotion, wait until ready")
@@ -115,8 +116,14 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             return result, total_spheres_tensor, None
 
         ### Scene Handling
-        new_scene_hash = hash(str(goal_handle.request.robot_state.attached_collision_objects)) + hash(str(goal_handle.request.robot_state.attached_collision_objects)) + hash(str(goal_handle.request.use_planning_scene))
-        print("Scene hash: ",new_scene_hash )
+        new_scene_hash = (
+            hash(str(goal_handle.request.robot_state.attached_collision_objects))
+            + hash(str(goal_handle.request.use_planning_scene))
+            + hash(str(goal_handle.request.world.octomap))
+        )
+        print("Old scene hash: ",self.scene_hash )
+        print("Scene hash:     ",new_scene_hash, "number of attached objects: ", len(goal_handle.request.robot_state.attached_collision_objects) if goal_handle.request.robot_state else "no robot state in request")
+        
         if  new_scene_hash != self.scene_hash:
             self.scene_hash = new_scene_hash
             self.get_logger().info("New scene identified updating curobo...")
@@ -214,19 +221,17 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                     total_spheres_tensor = torch.from_numpy(total_spheres_np)
                     self.get_logger().info(f"Attaching tensor of shape {total_spheres_tensor.shape} to gripper link.")
                     # self.toggle_link_collision(plan_req.disable_collision_links, True)
+                    self._attached_spheres_tensor = total_spheres_tensor
                     
             # result.success = False
             # return result
         else:
             self.get_logger().info("Scipping world update.")
+            total_spheres_tensor = self._attached_spheres_tensor
         
         return result, total_spheres_tensor, None
 
     def motion_plan_execute_callback(self, goal_handle):
-        # print config
-        print("Planning request received with config:")
-        print(self.robot_config)
-        
         import time
         start = time.time()
         
@@ -246,13 +251,6 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         goal_handle.succeed()
         # self.motion_gen.reset(reset_seed=False)
 
-        print("before scene: ",time.time() - start)
-        result, total_spheres_tensor, err = self._handle_scene(goal_handle)
-        if isinstance(err,Exception):
-            self.get_logger().error("Exception on handle scene: ",err)
-            return result
-        print("after scene: ",time.time() - start)
-        
         ### Handle Start State
         start_state = None
         if plan_req.use_current_state:
@@ -331,6 +329,13 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                     self.locked_joint_positions, 
                     robot_config_dict=self.robot_config
                 )
+
+        print("before scene: ",time.time() - start)
+        result, total_spheres_tensor, err = self._handle_scene(goal_handle)
+        if isinstance(err,Exception):
+            self.get_logger().error("Exception on handle scene: ",err)
+            return result
+        print("after scene: ",time.time() - start)
 
         if plan_req.plan_grasp:
             self.get_logger().info(
