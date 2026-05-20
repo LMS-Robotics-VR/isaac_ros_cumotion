@@ -247,6 +247,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         )
         
         plan_req = goal_handle.request
+        result = MotionPlan.Result()
 
         goal_handle.succeed()
         # self.motion_gen.reset(reset_seed=False)
@@ -259,6 +260,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                     "joint_state was not received from "
                     + self._CumotionActionServer__joint_states_topic
                 )
+                result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
+                result.message = "Current joint state is not available."
                 return result
             # read joint state:
             state = CuJointState.from_position(
@@ -283,6 +286,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             )
         else:
             self.get_logger().error("joint state in start state was empty")
+            result.error_code.val = MotionGenStatus.INVALID_START_STATE_UNKNOWN_ISSUE
+            result.message = "Start state is not available."
             return result
         print("start state: ",time.time() - start)
         
@@ -293,6 +298,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         ### Lock Liftkit Joint
         if plan_req.start_state.name[0] != "liftkit_joint":
             print("the planning request must contain liftkit_joint at [0] position")
+            result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
+            result.message = "Liftkit joint name is not in the correct position, expected at 0 index."
             return result
         
         # 1. Χρήση dictionary comprehension για καθαρότητα
@@ -334,6 +341,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         result, total_spheres_tensor, err = self._handle_scene(goal_handle)
         if isinstance(err,Exception):
             self.get_logger().error("Exception on handle scene: ",err)
+            result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
+            result.message = "Scene is not available."
             return result
         print("after scene: ",time.time() - start)
 
@@ -345,6 +354,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             self.get_logger().info(f"Success, Error Code): {success}, {error_code}!")
             if not success:
                 result.error_code.val = error_code
+                result.message = "Failed to get goal poses."
                 return result
             hold_vec_weight = None
             if len(plan_req.grasp_partial_pose_vec_weight) == 6:
@@ -408,6 +418,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 self.get_logger().info("Planning CSpace target")
                 if len(plan_req.goal_state.position) <= 0:
                     self.get_logger().error("goal state is empty")
+                    result.error_code.val = MoveItErrorCodes.GOAL_CONSTRAINTS_VIOLATED
+                    result.message = "Goal state is not available."
                     return result
                 
                 # result.success = False
@@ -463,6 +475,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 success, error_code, poses = self.get_goal_poses(plan_req)
                 if not success:
                     result.error_code.val = error_code
+                    result.message = "Failed to get goal poses."
                     return result
                 print("after get goal posees: ",time.time() - start)
                 
@@ -545,6 +558,8 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 )
                 if motion_gen_result.status == MotionGenStatus.IK_FAIL:
                     result.error_code.val = MoveItErrorCodes.NO_IK_SOLUTION
+                if motion_gen_result.status in [MotionGenStatus.FINETUNE_TRAJOPT_FAIL, MotionGenStatus.TRAJOPT_FAIL, MotionGenStatus.GRAPH_FAIL]:
+                    result.error_code.val = MoveItErrorCodes.TIMED_OUT
 
             self.get_logger().info(
                 "returned planning result (query, success, failure_status): "
@@ -556,7 +571,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             )
 
         self._CumotionActionServer__query_count += 1
-
+        result.message = "Planning completed with status: " + str(motion_gen_result.status)
         return result
 
 
