@@ -43,7 +43,14 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         )
         self.scene_hash = "" # usefull for only updating scene when changes happen identified easily with a hash
         self._attached_spheres_tensor = None
-
+        
+    def reset_planner(self):
+        pass
+    #     try:
+    #         self.motion_gen.reset()
+    #     except Exception as e:
+    #         self.get_logger().warn(f"Reset failed: {e}")
+            
     def warmup(self):
         self.get_logger().info("warming up cuMotion, wait until ready")
         # self.motion_gen.warmup(enable_graph=True, n_goalset=100, warmup_js_trajopt=True)
@@ -262,6 +269,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 )
                 result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
                 result.message = "Current joint state is not available."
+                self.reset_planner()
                 return result
             # read joint state:
             state = CuJointState.from_position(
@@ -288,6 +296,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             self.get_logger().error("joint state in start state was empty")
             result.error_code.val = MotionGenStatus.INVALID_START_STATE_UNKNOWN_ISSUE
             result.message = "Start state is not available."
+            self.reset_planner()
             return result
         print("start state: ",time.time() - start)
         
@@ -300,6 +309,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             print("the planning request must contain liftkit_joint at [0] position")
             result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
             result.message = "Liftkit joint name is not in the correct position, expected at 0 index."
+            self.reset_planner()
             return result
         
         # 1. Χρήση dictionary comprehension για καθαρότητα
@@ -343,6 +353,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             self.get_logger().error("Exception on handle scene: ",err)
             result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
             result.message = "Scene is not available."
+            self.reset_planner()
             return result
         print("after scene: ",time.time() - start)
 
@@ -355,6 +366,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             if not success:
                 result.error_code.val = error_code
                 result.message = "Failed to get goal poses."
+                self.reset_planner()
                 return result
             hold_vec_weight = None
             if len(plan_req.grasp_partial_pose_vec_weight) == 6:
@@ -420,6 +432,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                     self.get_logger().error("goal state is empty")
                     result.error_code.val = MoveItErrorCodes.GOAL_CONSTRAINTS_VIOLATED
                     result.message = "Goal state is not available."
+                    self.reset_planner()
                     return result
                 
                 # result.success = False
@@ -438,7 +451,6 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 
                 print("start state pos: ",start_state.position)
                 print("goal state pos: ",goal_state.position)
-                
                 motion_gen_result = self.motion_gen.plan_single_js(
                     start_state,
                     goal_state,
@@ -459,6 +471,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                         self.get_logger().error(
                             "Partial pose vec weight should be of length 6"
                         )
+                        self.reset_planner()
                         return result
 
                     hold_vec_weight = [
@@ -476,6 +489,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 if not success:
                     result.error_code.val = error_code
                     result.message = "Failed to get goal poses."
+                    self.reset_planner()
                     return result
                 print("after get goal posees: ",time.time() - start)
                 
@@ -572,6 +586,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
 
         self._CumotionActionServer__query_count += 1
         result.message = "Planning completed with status: " + str(motion_gen_result.status)
+        self.reset_planner()
         return result
 
 
