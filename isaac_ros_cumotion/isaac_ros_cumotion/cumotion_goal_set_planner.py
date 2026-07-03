@@ -259,7 +259,53 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
         goal_handle.succeed()
         # self.motion_gen.reset(reset_seed=False)
 
-        ### Handle Start State
+        ### Lock Liftkit Joint (must come before scene update and JS capture)
+        if len(plan_req.start_state.name) == 0 or plan_req.start_state.name[0] != "liftkit_joint":
+            print("the planning request must contain liftkit_joint at [0] position")
+            result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
+            result.message = "Liftkit joint name is not in the correct position, expected at 0 index."
+            self.reset_planner()
+            return result
+
+        requested_locked_joint_positions = {}
+        print("plan_req.start_state.name", plan_req.start_state.name)
+        print("plan_req.start_state.position", plan_req.start_state.position)
+
+        plan_req_joint_name_to_index_map = {name: idx for idx, name in enumerate(plan_req.start_state.name)}
+        for name in self.locked_joint_positions.keys():
+            idx = plan_req_joint_name_to_index_map.get(name, None)
+            if idx is not None:
+                requested_locked_joint_positions[name] = float(plan_req.start_state.position[idx])
+                print(f"Requested locked joint: {name} with position {requested_locked_joint_positions[name]}")
+
+        if requested_locked_joint_positions:
+            print(f"Requested locked joint positions: {requested_locked_joint_positions}")
+            diff = sum(
+                abs(
+                    float(requested_locked_joint_positions[jn]) -
+                    float(self.locked_joint_positions.get(jn, requested_locked_joint_positions[jn]))
+                )
+                for jn in requested_locked_joint_positions
+            )
+            if diff > 0.001:
+                self.locked_joint_positions.update(requested_locked_joint_positions)
+                print(f"Updating locked joints with positions: {self.locked_joint_positions}")
+                self.motion_gen.update_locked_joints(
+                    self.locked_joint_positions,
+                    robot_config_dict=self.robot_config
+                )
+
+        print("before scene: ", time.time() - start)
+        result, total_spheres_tensor, err = self._handle_scene(goal_handle)
+        if isinstance(err, Exception):
+            self.get_logger().error("Exception on handle scene: ", err)
+            result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
+            result.message = "Scene is not available."
+            self.reset_planner()
+            return result
+        print("after scene: ", time.time() - start)
+
+        ### Handle Start State (AFTER scene update so joint state is fresh relative to the updated world)
         start_state = None
         if plan_req.use_current_state:
             if self._CumotionActionServer__js_buffer is None:
@@ -271,7 +317,6 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 result.message = "Current joint state is not available."
                 self.reset_planner()
                 return result
-            # read joint state:
             state = CuJointState.from_position(
                 position=self.tensor_args.to_device(
                     self._CumotionActionServer__js_buffer["position"]
@@ -282,7 +327,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
                 self._CumotionActionServer__js_buffer["velocity"]
             ).unsqueeze(0)
             start_state = self.motion_gen.get_active_js(state)
-            self._CumotionActionServer__js_buffer = None
+            # Do NOT clear __js_buffer — js_callback keeps it current continuously
         elif len(plan_req.start_state.position) > 0:
             start_state = self.motion_gen.get_active_js(
                 CuJointState.from_position(
@@ -298,64 +343,7 @@ class CumotionGoalSetPlannerServer(CumotionActionServer):
             result.message = "Start state is not available."
             self.reset_planner()
             return result
-        print("start state: ",time.time() - start)
-        
-        # find the index of the liftkit joint on the start position
-        # if found then check if the goal_state liftkit position is same
-        # if is then set the liftkit constraint in motion_gen with update_locked_joints with the value
-
-        ### Lock Liftkit Joint
-        if plan_req.start_state.name[0] != "liftkit_joint":
-            print("the planning request must contain liftkit_joint at [0] position")
-            result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
-            result.message = "Liftkit joint name is not in the correct position, expected at 0 index."
-            self.reset_planner()
-            return result
-        
-        # 1. Χρήση dictionary comprehension για καθαρότητα
-        requested_locked_joint_positions = {}
-        print("plan_req.start_state.name",plan_req.start_state.name)
-        print("plan_req.start_state.position",plan_req.start_state.position)
-        
-        plan_req_joint_name_to_index_map = {name: idx for idx, name in enumerate(plan_req.start_state.name)}
-        for name in self.locked_joint_positions.keys():
-            idx = plan_req_joint_name_to_index_map.get(name, None)
-            if idx is not None:
-                requested_locked_joint_positions[name] = float(plan_req.start_state.position[idx])
-                print(f"Requested locked joint: {name} with position {requested_locked_joint_positions[name]}")
-
-        # 2. Έλεγχος αν υπάρχουν όντως κλειδωμένα joints για αποφυγή σφαλμάτων
-        if requested_locked_joint_positions:
-            print(f"Requested locked joint positions: {requested_locked_joint_positions}")
-            # Υπολογισμός διαφοράς με ασφάλεια
-            diff = sum(
-                abs(
-                    float(requested_locked_joint_positions[jn]) -
-                    float(self.locked_joint_positions.get(jn, requested_locked_joint_positions[jn]))
-                )
-                for jn in requested_locked_joint_positions
-            )
-            
-            should_update_locked_joints = diff > 0.001
-
-            if should_update_locked_joints:
-                self.locked_joint_positions.update(requested_locked_joint_positions)
-                print(f"Updating locked joints with positions: {self.locked_joint_positions}")
-                # Προσοχή: Το update_locked_joints στην GPU μπορεί να πάρει χρόνο
-                self.motion_gen.update_locked_joints(
-                    self.locked_joint_positions, 
-                    robot_config_dict=self.robot_config
-                )
-
-        print("before scene: ",time.time() - start)
-        result, total_spheres_tensor, err = self._handle_scene(goal_handle)
-        if isinstance(err,Exception):
-            self.get_logger().error("Exception on handle scene: ",err)
-            result.error_code.val = MoveItErrorCodes.START_STATE_INVALID
-            result.message = "Scene is not available."
-            self.reset_planner()
-            return result
-        print("after scene: ",time.time() - start)
+        print("start state: ", time.time() - start)
 
         if plan_req.plan_grasp:
             self.get_logger().info(
